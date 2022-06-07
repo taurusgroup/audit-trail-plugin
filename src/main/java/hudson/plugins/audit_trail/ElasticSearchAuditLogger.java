@@ -24,24 +24,22 @@
 
 package hudson.plugins.audit_trail;
 
-import java.io.ByteArrayOutputStream;
-import java.io.IOException;
-import java.io.PrintStream;
-import java.io.UnsupportedEncodingException;
-import java.net.MalformedURLException;
-import java.net.URISyntaxException;
-import java.net.URL;
-import java.nio.charset.StandardCharsets;
-import java.security.GeneralSecurityException;
-import java.security.KeyStore;
-import java.util.Calendar;
-import java.util.Collections;
-import java.util.List;
-import java.util.logging.Level;
-import java.util.logging.Logger;
-
-import javax.net.ssl.SSLContext;
-
+import com.cloudbees.plugins.credentials.CredentialsMatchers;
+import com.cloudbees.plugins.credentials.CredentialsProvider;
+import com.cloudbees.plugins.credentials.common.StandardCertificateCredentials;
+import com.cloudbees.plugins.credentials.common.StandardCredentials;
+import com.cloudbees.plugins.credentials.common.StandardListBoxModel;
+import com.cloudbees.plugins.credentials.common.StandardUsernamePasswordCredentials;
+import com.cloudbees.plugins.credentials.domains.DomainRequirement;
+import com.cloudbees.plugins.credentials.domains.URIRequirementBuilder;
+import hudson.Extension;
+import hudson.model.Descriptor;
+import hudson.security.ACL;
+import hudson.util.FormValidation;
+import hudson.util.ListBoxModel;
+import hudson.util.Secret;
+import jenkins.model.Jenkins;
+import net.sf.json.JSONObject;
 import org.apache.commons.codec.binary.Base64;
 import org.apache.commons.lang.StringUtils;
 import org.apache.commons.lang.exception.ExceptionUtils;
@@ -62,28 +60,28 @@ import org.kohsuke.stapler.DataBoundConstructor;
 import org.kohsuke.stapler.DataBoundSetter;
 import org.kohsuke.stapler.QueryParameter;
 
-import com.cloudbees.plugins.credentials.CredentialsMatchers;
-import com.cloudbees.plugins.credentials.CredentialsProvider;
-import com.cloudbees.plugins.credentials.common.StandardCertificateCredentials;
-import com.cloudbees.plugins.credentials.common.StandardCredentials;
-import com.cloudbees.plugins.credentials.common.StandardListBoxModel;
-import com.cloudbees.plugins.credentials.common.StandardUsernamePasswordCredentials;
-import com.cloudbees.plugins.credentials.domains.DomainRequirement;
-import com.cloudbees.plugins.credentials.domains.URIRequirementBuilder;
-
-import hudson.Extension;
-import hudson.model.Descriptor;
-import hudson.security.ACL;
-import hudson.util.FormValidation;
-import hudson.util.ListBoxModel;
-import hudson.util.Secret;
-import jenkins.model.Jenkins;
-import net.sf.json.JSONObject;
+import javax.net.ssl.SSLContext;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.PrintStream;
+import java.io.UnsupportedEncodingException;
+import java.net.MalformedURLException;
+import java.net.URISyntaxException;
+import java.net.URL;
+import java.nio.charset.StandardCharsets;
+import java.security.GeneralSecurityException;
+import java.security.KeyStore;
+import java.util.Calendar;
+import java.util.Collections;
+import java.util.Date;
+import java.util.List;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 /**
  * AuditLogger implementation to send audit logs to an Elastic Search server.
  * Some code take from the Jenkins logstash plugin: https://github.com/jenkinsci/logstash-plugin
- *
+ * <p>
  * Default values are set in <code>/src/main/resources/hudson/plugins/audit_trail/ElasticSearchAuditLogger/config.jelly</code>
  *
  * @author <a href="mailto:alexander.russell@sap.com">Alex Russell</a>
@@ -99,6 +97,8 @@ public class ElasticSearchAuditLogger extends AuditLogger {
 
     protected static final Logger LOGGER = Logger.getLogger(ElasticSearchAuditLogger.class.getName());
     private static final FastDateFormat DATE_FORMATTER = FastDateFormat.getInstance("yyyy-MM-dd'T'HH:mm:ssZ");
+
+    private static final FastDateFormat SIMPLE_DATE_FORMATTER = FastDateFormat.getInstance("yyyy-MM-dd");
 
     @DataBoundConstructor
     public ElasticSearchAuditLogger(String url, boolean skipCertificateValidation) {
@@ -172,27 +172,29 @@ public class ElasticSearchAuditLogger extends AuditLogger {
 
     /**
      * Returns the usernamePassword credential with the specified id.
+     *
      * @param credentialsId The id of the usernamePassword credential to find
      * @return The credentials object or null if not found
      */
     private StandardUsernamePasswordCredentials getUsernamePasswordCredentials(String credentialsId) {
         return (StandardUsernamePasswordCredentials) CredentialsMatchers.firstOrNull(
-            CredentialsProvider.lookupCredentials(StandardUsernamePasswordCredentials.class,
-                Jenkins.getInstance(), ACL.SYSTEM, Collections.emptyList()),
-          CredentialsMatchers.withId(credentialsId)
+                CredentialsProvider.lookupCredentials(StandardUsernamePasswordCredentials.class,
+                        Jenkins.getInstance(), ACL.SYSTEM, Collections.emptyList()),
+                CredentialsMatchers.withId(credentialsId)
         );
     }
 
     /**
      * Returns the certificate credential with the specified id.
+     *
      * @param credentialsId The id of the certificate credential to find
      * @return The credentials object or null if not found
      */
     private StandardCertificateCredentials getCertificateCredentials(String credentialsId) {
         return (StandardCertificateCredentials) CredentialsMatchers.firstOrNull(
-            CredentialsProvider.lookupCredentials(StandardCertificateCredentials.class,
-                Jenkins.getInstance(), ACL.SYSTEM, Collections.emptyList()),
-            CredentialsMatchers.withId(credentialsId)
+                CredentialsProvider.lookupCredentials(StandardCertificateCredentials.class,
+                        Jenkins.getInstance(), ACL.SYSTEM, Collections.emptyList()),
+                CredentialsMatchers.withId(credentialsId)
         );
     }
 
@@ -348,7 +350,10 @@ public class ElasticSearchAuditLogger extends AuditLogger {
         }
 
         HttpPost getHttpPost(String data) {
-            HttpPost postRequest = new HttpPost(url);
+            String urlWithDate = addTodaysDateToURL(url);
+            HttpPost postRequest = new HttpPost(urlWithDate);
+            System.out.println("url " + url);
+            System.out.println("urlWithDate " + urlWithDate);
             // char encoding is set to UTF_8 since this request posts a JSON string
             JSONObject payload = new JSONObject();
             payload.put("message", data);
@@ -372,8 +377,8 @@ public class ElasticSearchAuditLogger extends AuditLogger {
                     stream.print("HTTP error code: ");
                     stream.println(response.getStatusLine().getStatusCode());
                     stream.print("URL: ");
-                    stream.println(url.toString());
-                    stream.println("RESPONSE: " + response.toString());
+                    stream.println(url);
+                    stream.println("RESPONSE: " + response);
                     response.getEntity().writeTo(stream);
                 } catch (IOException e) {
                     stream.println(ExceptionUtils.getStackTrace(e));
@@ -399,8 +404,8 @@ public class ElasticSearchAuditLogger extends AuditLogger {
         }
 
         public ListBoxModel doFillUsernamePasswordCredentialsIdItems(
-            @QueryParameter String usernamePasswordCredentialsId,
-            @QueryParameter String url) {
+                @QueryParameter String usernamePasswordCredentialsId,
+                @QueryParameter String url) {
             if (!Jenkins.getInstance().hasPermission(Jenkins.ADMINISTER)) {
                 return new StandardListBoxModel().includeCurrentValue(usernamePasswordCredentialsId);
             }
@@ -417,8 +422,8 @@ public class ElasticSearchAuditLogger extends AuditLogger {
         }
 
         public ListBoxModel doFillClientCertificateCredentialsIdItems(
-            @QueryParameter String clientCertificateCredentialsId,
-            @QueryParameter String url) {
+                @QueryParameter String clientCertificateCredentialsId,
+                @QueryParameter String url) {
             if (!Jenkins.getInstance().hasPermission(Jenkins.ADMINISTER)) {
                 return new StandardListBoxModel().includeCurrentValue(clientCertificateCredentialsId);
             }
@@ -445,7 +450,7 @@ public class ElasticSearchAuditLogger extends AuditLogger {
                     return FormValidation.error("Please specify user and password not as part of the url.");
                 }
 
-                if(StringUtils.isBlank(url.getPath()) || url.getPath().trim().matches("^\\/+$")) {
+                if (StringUtils.isBlank(url.getPath()) || url.getPath().trim().matches("^\\/+$")) {
                     return FormValidation.warning("Elastic Search requires an index name and document type to be able to index the logs.  eg. https://elastic.mydomain.com/myindex/jenkinslog/");
                 }
 
@@ -455,6 +460,21 @@ public class ElasticSearchAuditLogger extends AuditLogger {
             }
             return FormValidation.ok();
         }
+    }
+
+    public static String addTodaysDateToURL(String elasticUrl) {
+        URL url;
+        try {
+            url = new URL(elasticUrl);
+        } catch (MalformedURLException e) {
+            throw new RuntimeException(e);
+        }
+        String path = url.getPath();
+        String[] parts = path.split("/");
+        String indexName = parts[1];
+        String today = SIMPLE_DATE_FORMATTER.format(new Date());
+        indexName = indexName + "." + today;
+        return "https://" + url.getHost() + ":" + url.getPort() + "/" + indexName + "/jenkinslogs";
     }
 
 }
